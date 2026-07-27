@@ -1,4 +1,11 @@
 import assert from "node:assert/strict";
+import { AiApiError } from "@/lib/ai-api/errors";
+import { parseTrainingFocusRequest } from "@/lib/ai-api/request-schema";
+import { readLimitedJson } from "@/lib/ai-api/security";
+import { POST as postDailyCoach } from "@/app/api/ai/daily-coach/route";
+import { POST as postInBodyCoach } from "@/app/api/ai/inbody-coach/route";
+import { POST as postMealCoach } from "@/app/api/ai/meal-coach/route";
+import { POST as postTrainingFocus } from "@/app/api/ai/training-focus/route";
 import type {
   BodyComposition,
   BodyGoalProfile,
@@ -20,6 +27,11 @@ import { exerciseCatalog } from "@/lib/exercise-data";
 import { getInBodyTrendSummary, parseInBodyCsv } from "@/lib/inbody";
 import { calculateDailyNutritionPlan } from "@/lib/nutrition";
 import { calculateSessionVolumePrescription, defaultPersonalTrainingStyleProfile } from "@/lib/training-style";
+import {
+  findConstraintViolations,
+  summarizeEvaluation
+} from "@/lib/evaluation/constraint-evaluator";
+import { runDeterministicEvaluationSuite } from "@/lib/evaluation/scenarios";
 import { localStoreKeys } from "@/lib/local-store-keys";
 import {
   loadWorkoutSessionRecords,
@@ -212,6 +224,8 @@ function scenario1() {
   assert.ok(plan.items.every((item) => item.equipment.every((equipment) => ["machine", "cardio"].includes(equipment.equipment_type))));
   assert.ok(decision.estimatedDurationMinutes <= 60);
   assert.equal(/Push Day|Pull Day|Legs/i.test(decision.sessionTitle), false);
+  const titleParts = (plan.sessionTitle ?? "").split(" · ");
+  assert.equal(new Set(titleParts).size, titleParts.length);
   assert.ok(
     decision.selectedMuscles.some((item) => ["lats", "upper_back", "side_delt", "rear_delt"].includes(item.muscle))
   );
@@ -280,21 +294,22 @@ function scenario3() {
 }
 
 function scenario4() {
+  // All body-composition fixtures are deliberately synthetic and future-dated.
   const csv = [
     "날짜,측정장비,체중(kg),골격근량(kg),체지방량(kg),체지방률(%)",
-    "20260619155555,InBody,80.2,34.1,0,14.2"
+    "20300115120000,Synthetic Device,72.0,30.0,0,18.0"
   ].join("\n");
   const exportedCsv = [
-    "Member,Sample",
+    "Member,Synthetic Demo",
     "Date,Device,Weight,SMM,Body Fat Mass,PBF",
-    "2026-06-20 09:05,InBody 770,79.4kg,34.5kg,10.8kg,13.6%"
+    "2030-01-16 09:05,Synthetic Device,70.0kg,31.0kg,12.0kg,17.1%"
   ].join("\n");
   const parsed = parseInBodyCsv(csv);
   const exported = parseInBodyCsv(exportedCsv);
   const trend = getInBodyTrendSummary(parsed.records);
   assert.equal(parsed.records[0].bodyFatMassKg, 0);
-  assert.equal(exported.records[0].measuredAt, "2026-06-20T09:05:00+09:00");
-  assert.equal(exported.records[0].skeletalMuscleMassKg, 34.5);
+  assert.equal(exported.records[0].measuredAt, "2030-01-16T09:05:00+09:00");
+  assert.equal(exported.records[0].skeletalMuscleMassKg, 31);
   assert.equal(trend.status, "insufficient_data");
   assert.equal(trend.summary.join(" ").includes("근손실"), false);
 }
@@ -372,10 +387,10 @@ function scenario8() {
   };
   const progress = calculateBodyGoalProgress(metricGoal, [
     {
-      measuredAt: "2026-06-19T15:55:55+09:00",
-      device: "InBody",
-      weightKg: 82.7,
-      skeletalMuscleMassKg: 36.9,
+      measuredAt: "2030-01-15T12:00:00+09:00",
+      device: "Synthetic Device",
+      weightKg: 100,
+      skeletalMuscleMassKg: 40,
       muscleMassKg: null,
       bodyFatMassKg: null,
       bmi: null,
@@ -399,10 +414,10 @@ function scenario8() {
   ]);
 
   assert.equal(progress.status, "in_progress");
-  assert.ok(progress.currentValue !== null && Math.abs(progress.currentValue - 0.446) < 0.002);
-  assert.ok(progress.progressPercentage !== null && Math.abs(progress.progressPercentage - 89.2) < 0.5);
-  assert.ok(progress.scenarios.some((scenario) => scenario.description.includes("41.35kg")));
-  assert.ok(progress.scenarios.some((scenario) => scenario.description.includes("73.8kg")));
+  assert.ok(progress.currentValue !== null && Math.abs(progress.currentValue - 0.4) < 0.002);
+  assert.ok(progress.progressPercentage !== null && Math.abs(progress.progressPercentage - 80) < 0.5);
+  assert.ok(progress.scenarios.some((scenario) => scenario.description.includes("50kg")));
+  assert.ok(progress.scenarios.some((scenario) => scenario.description.includes("80kg")));
 }
 
 function scenario9() {
@@ -667,19 +682,255 @@ function scenario14() {
   assert.equal(loadWorkoutSetRecords().length, 2);
 }
 
-scenario1();
-scenario2();
-scenario3();
-scenario4();
-scenario5();
-scenario6();
-scenario7();
-scenario8();
-scenario9();
-scenario10();
-scenario11();
-scenario12();
-scenario13();
-scenario14();
+function scenario15() {
+  const context = buildContext({
+    dailyCheckIn: checkIn({
+      painMuscles: ["shoulders"],
+      painLevel: { shoulders: 9 }
+    })
+  });
+  const decision = generateFallbackTrainingDecision(context);
+  const plan = generateWorkoutPlanFromDecision({
+    decision,
+    forbiddenMuscles: context.hardConstraints.forbiddenMuscles,
+    forbiddenMovementFamilies: context.hardConstraints.forbiddenMovementFamilies
+  });
+  const shoulderParts = new Set(["front_delt", "side_delt", "rear_delt", "traps"]);
+  assert.equal(
+    plan.items.some(
+      (item) =>
+        shoulderParts.has(item.exercise.primary_muscle)
+        || shoulderParts.has(item.exercise.target_region)
+    ),
+    false
+  );
+  assert.deepEqual(findConstraintViolations({ context, decision, plan }), []);
+}
 
-console.log("core scenarios passed");
+function scenario16() {
+  const unavailableId = "eq-lat-pulldown";
+  const equipment = equipmentCatalog.map((item) =>
+    item.id === unavailableId ? { ...item, is_available: false } : item
+  );
+  const context = buildDailyTrainingContext({
+    checkIn: checkIn(),
+    goal: goal(),
+    settings: settings("machine_cable_priority"),
+    equipment,
+    exercises: exerciseCatalog,
+    workoutLogs: [],
+    bodyCompositions: [],
+    mealLogs: [],
+    nutritionProfile: nutritionProfile(),
+    now
+  });
+  const decision = generateFallbackTrainingDecision(context);
+  const plan = generateWorkoutPlanFromDecision({
+    decision,
+    equipment,
+    forbiddenMuscles: context.hardConstraints.forbiddenMuscles,
+    forbiddenMovementFamilies: context.hardConstraints.forbiddenMovementFamilies
+  });
+  assert.equal(
+    plan.items.some((item) =>
+      item.equipment.some((selected) => selected.id === unavailableId)
+    ),
+    false
+  );
+  assert.deepEqual(findConstraintViolations({ context, decision, plan }), []);
+}
+
+function scenario17() {
+  const context = buildContext({
+    dailyCheckIn: checkIn({ availableTimeMinutes: 15 })
+  });
+  const decision = generateFallbackTrainingDecision(context);
+  const plan = generateWorkoutPlanFromDecision({
+    decision,
+    input: {
+      workoutType: "full_body",
+      availableMinutes: 15,
+      intensity: decision.overallIntensity,
+      equipmentPreference: "machine_cable_priority",
+      soreMuscles: [],
+      temporarilyUnavailableEquipmentIds: [],
+      avoidedEquipmentIds: [],
+      recentExerciseIds: []
+    },
+    forbiddenMuscles: context.hardConstraints.forbiddenMuscles,
+    forbiddenMovementFamilies: context.hardConstraints.forbiddenMovementFamilies
+  });
+  assert.ok(decision.estimatedDurationMinutes <= 15);
+  assert.deepEqual(findConstraintViolations({ context, decision, plan }), []);
+}
+
+function scenario18() {
+  const noEquipment = equipmentCatalog.map((item) => ({
+    ...item,
+    is_available: false
+  }));
+  const context = buildDailyTrainingContext({
+    checkIn: checkIn(),
+    goal: goal(),
+    settings: settings("machine_cable_priority"),
+    equipment: noEquipment,
+    exercises: exerciseCatalog,
+    workoutLogs: [],
+    bodyCompositions: [],
+    mealLogs: [],
+    nutritionProfile: nutritionProfile(),
+    now
+  });
+  const decision = generateFallbackTrainingDecision(context);
+  const plan = generateWorkoutPlanFromDecision({
+    decision,
+    equipment: noEquipment,
+    forbiddenMuscles: context.hardConstraints.forbiddenMuscles,
+    forbiddenMovementFamilies: context.hardConstraints.forbiddenMovementFamilies
+  });
+  assert.equal(decision.fallbackUsed, true);
+  assert.equal(decision.sessionMode, "rest_recommended");
+  assert.equal(plan.workoutType, "rest");
+  assert.deepEqual(findConstraintViolations({ context, decision, plan }), []);
+}
+
+async function scenario19() {
+  const context = buildContext();
+  assert.deepEqual(parseTrainingFocusRequest({ context }).context, context);
+  assert.throws(
+    () =>
+      parseTrainingFocusRequest({
+        context: { ...context, availableTimeMinutes: 1000 }
+      }),
+    (error) => error instanceof AiApiError && error.code === "INVALID_REQUEST"
+  );
+
+  const oversized = new Request("http://localhost/api/ai/training-focus", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ payload: "x".repeat(200) })
+  });
+  await assert.rejects(
+    () => readLimitedJson(oversized, 64),
+    (error) => error instanceof AiApiError && error.code === "PAYLOAD_TOO_LARGE"
+  );
+
+  const wrongMediaType = new Request("http://localhost/api/ai/training-focus", {
+    method: "POST",
+    headers: { "Content-Type": "text/plain" },
+    body: "{}"
+  });
+  await assert.rejects(
+    () => readLimitedJson(wrongMediaType, 64),
+    (error) =>
+      error instanceof AiApiError
+      && error.code === "UNSUPPORTED_MEDIA_TYPE"
+  );
+}
+
+function scenario20() {
+  const results = runDeterministicEvaluationSuite();
+  const summary = summarizeEvaluation(results);
+  assert.equal(summary.scenarioCount, 10);
+  assert.equal(summary.constraintViolationScenarioCount, 0);
+  assert.equal(summary.validPlanCount, 10);
+  assert.equal(summary.fallbackSuccessCount, 9);
+  assert.ok(results.some((result) => result.id === "invalid-ai-slots-sanitized"));
+}
+
+async function scenario21() {
+  const previousGuestPolicy = process.env.AI_GUEST_ACCESS_ENABLED;
+  const previousRateLimitBackend = process.env.AI_RATE_LIMIT_BACKEND;
+  const previousOpenAiKey = process.env.OPENAI_API_KEY;
+  process.env.AI_GUEST_ACCESS_ENABLED = "false";
+
+  try {
+    const routes = [
+      postDailyCoach,
+      postInBodyCoach,
+      postMealCoach,
+      postTrainingFocus
+    ];
+    for (const post of routes) {
+      const response = await post(new Request("http://localhost/api/ai/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}"
+      }));
+      const body = await response.json() as {
+        error?: { code?: string; requestId?: string };
+      };
+      assert.equal(response.status, 401);
+      assert.equal(body.error?.code, "UNAUTHORIZED");
+      assert.ok(body.error?.requestId);
+      assert.match(response.headers.get("cache-control") ?? "", /no-store/);
+    }
+
+    process.env.AI_GUEST_ACCESS_ENABLED = "true";
+    process.env.AI_RATE_LIMIT_BACKEND = "memory";
+    delete process.env.OPENAI_API_KEY;
+    const context = buildContext();
+    const statuses: number[] = [];
+    for (let requestIndex = 0; requestIndex < 7; requestIndex += 1) {
+      const response = await postTrainingFocus(
+        new Request("http://localhost/api/ai/training-focus", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-forwarded-for": "192.0.2.44"
+          },
+          body: JSON.stringify({ context })
+        })
+      );
+      statuses.push(response.status);
+    }
+    assert.deepEqual(statuses.slice(0, 6), [200, 200, 200, 200, 200, 200]);
+    assert.equal(statuses[6], 429);
+  } finally {
+    if (previousGuestPolicy === undefined) {
+      delete process.env.AI_GUEST_ACCESS_ENABLED;
+    } else {
+      process.env.AI_GUEST_ACCESS_ENABLED = previousGuestPolicy;
+    }
+    if (previousRateLimitBackend === undefined) {
+      delete process.env.AI_RATE_LIMIT_BACKEND;
+    } else {
+      process.env.AI_RATE_LIMIT_BACKEND = previousRateLimitBackend;
+    }
+    if (previousOpenAiKey === undefined) {
+      delete process.env.OPENAI_API_KEY;
+    } else {
+      process.env.OPENAI_API_KEY = previousOpenAiKey;
+    }
+  }
+}
+
+async function main() {
+  scenario1();
+  scenario2();
+  scenario3();
+  scenario4();
+  scenario5();
+  scenario6();
+  scenario7();
+  scenario8();
+  scenario9();
+  scenario10();
+  scenario11();
+  scenario12();
+  scenario13();
+  scenario14();
+  scenario15();
+  scenario16();
+  scenario17();
+  scenario18();
+  await scenario19();
+  scenario20();
+  await scenario21();
+  console.log("21 core scenarios passed");
+}
+
+void main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

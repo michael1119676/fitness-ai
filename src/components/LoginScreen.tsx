@@ -197,7 +197,7 @@ export function LoginScreen() {
                 value={name}
                 onChange={setName}
                 autoComplete="name"
-                placeholder="예: Michael"
+                placeholder="예: 데모 사용자"
               />
             ) : null}
             <Field

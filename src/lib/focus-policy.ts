@@ -232,7 +232,7 @@ export function derivePlanFocusMuscles(items: WorkoutPlan["items"], policy?: Ses
       return counts;
     }, {});
   const policyOrder = policy ? [...policy.primaryMuscles, ...policy.allowedAccessoryMuscles] : Object.keys(ordered);
-  return unique(policyOrder.filter((part) => ordered[normalizePart(part)] || ordered[part]))
+  return unique(policyOrder.map(normalizePart).filter((part) => ordered[part]))
     .sort((a, b) => (ordered[normalizePart(b)] ?? 0) - (ordered[normalizePart(a)] ?? 0));
 }
 

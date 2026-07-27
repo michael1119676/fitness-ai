@@ -20,7 +20,8 @@ const appUserKeys = {
 } as const;
 
 const accentPool = ["mint", "sky", "coral"] as const;
-const guestAppUserId = "guest-reviewer";
+const guestAppUserId = "synthetic-demo-profile-v1";
+const retiredGuestAppUserIds = new Set(["guest-reviewer"]);
 export const appUserChangeEvent = "adfc-active-user-changed";
 
 function canUseStorage() {
@@ -67,7 +68,14 @@ export function loadAppUsers(): AppUser[] {
     const raw = window.localStorage.getItem(appUserKeys.users);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as AppUser[];
-    return parsed.filter((user) => user.id && user.name).slice(0, maxAppUsers);
+    return parsed
+      .filter(
+        (user) =>
+          user.id
+          && user.name
+          && !retiredGuestAppUserIds.has(user.id)
+      )
+      .slice(0, maxAppUsers);
   } catch {
     return [];
   }
@@ -75,7 +83,12 @@ export function loadAppUsers(): AppUser[] {
 
 export function getActiveAppUserId() {
   if (!canUseStorage()) return null;
-  return window.localStorage.getItem(appUserKeys.activeUser);
+  const activeId = window.localStorage.getItem(appUserKeys.activeUser);
+  if (activeId && retiredGuestAppUserIds.has(activeId)) {
+    window.localStorage.removeItem(appUserKeys.activeUser);
+    return null;
+  }
+  return activeId;
 }
 
 export function getActiveAppUser() {
@@ -148,11 +161,10 @@ export function activateGuestAppUser() {
 
   const users = loadAppUsers();
   const existing = users.find((item) => item.id === guestAppUserId);
-  const guestName = existing?.name && existing.name !== "검증 게스트" ? existing.name : "방문자";
   const nextUser: AppUser = {
     id: guestAppUserId,
     email: null,
-    name: guestName,
+    name: "합성 데모",
     accent: existing?.accent ?? "sky",
     createdAt: existing?.createdAt ?? new Date().toISOString()
   };

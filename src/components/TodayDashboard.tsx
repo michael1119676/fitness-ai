@@ -18,6 +18,7 @@ import {
   loadDailyPlanningState,
   type DailyPlanningState
 } from "@/lib/daily-plan-client";
+import { postAiJson } from "@/lib/ai-api/client";
 import {
   appendDailyPlanRevision,
   loadBodyMetricGoals,
@@ -174,17 +175,12 @@ export function TodayDashboard() {
     setStatus("plan_ready");
 
     try {
-      const response = await fetch("/api/ai/training-focus", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ context: fallbackSnapshot.context })
-      });
-      const result = (await response.json()) as {
+      const result = await postAiJson<{
         decision?: DailyTrainingDecision;
         source?: "openai" | "fallback";
         message?: string;
-      };
-      if (!response.ok || !result.decision) return;
+      }>("/api/ai/training-focus", { context: fallbackSnapshot.context });
+      if (!result.decision) return;
       const aiSnapshot = refresh(state, result.decision);
       commitPlan(state, aiSnapshot, "ai_training_focus_generated", { source: result.source ?? "openai" });
       setMessage("AI 판단까지 반영해 오늘 플랜을 갱신했습니다.");

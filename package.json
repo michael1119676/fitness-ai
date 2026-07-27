@@ -8,6 +8,8 @@
     "start": "next start",
     "lint": "eslint .",
     "test": "node scripts/run-core-tests.cjs",
+    "evaluate": "node scripts/run-evaluation.cjs",
+    "evaluate:write": "node scripts/run-evaluation.cjs --write",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

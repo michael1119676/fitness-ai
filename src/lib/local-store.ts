@@ -51,17 +51,17 @@ export const defaultBodyGoalProfile: BodyGoalProfile = {
 
 export const defaultBodyMetricGoals: BodyMetricGoal[] = [
   {
-    id: "goal-skeletal-muscle-ratio-50",
+    id: "synthetic-demo-balanced-ratio-goal",
     type: "skeletal_muscle_to_weight_ratio",
     direction: "at_least",
-    targetValue: 0.5,
+    targetValue: 0.42,
     targetMin: null,
     targetMax: null,
     priority: "primary",
     enabled: true,
-    createdAt: "2026-06-20T00:00:00.000Z",
+    createdAt: "2030-01-01T00:00:00.000Z",
     targetDate: null,
-    notes: "개인 체형 목표: 골격근량이 체중의 50% 이상"
+    notes: "합성 데모 목표이며 실제 사용자의 측정값이나 목표가 아닙니다."
   }
 ];
 
