@@ -1,12 +1,14 @@
 import OpenAI from "openai";
 import type { DailyTrainingContext, DailyTrainingDecision } from "@/lib/daily-types";
+import { minimizeTrainingContextForAi } from "@/lib/ai-api/minimize";
+import { validateCoachResult } from "@/lib/ai-api/request-schema";
+import { dailyTrainingDecisionJsonSchema } from "@/lib/daily-planning/decision-schema";
 import {
-  dailyTrainingDecisionJsonSchema,
   generateFallbackTrainingDecision,
   validateDailyTrainingDecision
 } from "@/lib/daily-planning";
 
-const timeoutMs = 20000;
+const timeoutMs = 12000;
 const defaultOpenAiModel = "gpt-5.5";
 
 function getClient() {
@@ -32,18 +34,6 @@ async function withTimeout<T>(promise: Promise<T>, ms = timeoutMs) {
   }
 }
 
-async function withSingleRetry<T>(factory: () => Promise<T>) {
-  try {
-    return await factory();
-  } catch (firstError) {
-    try {
-      return await factory();
-    } catch {
-      throw firstError;
-    }
-  }
-}
-
 function parseJson<T>(value: string): T {
   return JSON.parse(value) as T;
 }
@@ -62,43 +52,42 @@ export async function getTrainingFocusDecision(context: DailyTrainingContext) {
   }
 
   try {
-    const response = await withSingleRetry(() =>
-      withTimeout(
-        client.responses.create({
-          model,
-          instructions: [
-            "You are the AI Training Focus Planner for a Korean Adaptive Daily Fitness Coach.",
-            "Use only the provided JSON. Do not infer unavailable facts or invent records.",
-            "Return Korean reasoning and JSON only through the provided schema.",
-            "Choose session mode, body-part focus, selected/excluded muscles, and movement slots only.",
-            "Do not choose concrete exercise names or equipment names. The equipment-aware engine will do that.",
-            "forbiddenMuscles and painMuscles are absolute hard constraints. Never select them or related target regions.",
-            "forbiddenMovementFamilies are absolute hard constraints.",
-            "Never select a movementFamily that is absent from availableMovementCapabilities.",
-            "movementSlots.primaryMuscle and targetRegion must stay inside selectedMuscles or a clearly related accessory range.",
-            "Do not add antagonist or unrelated body parts just to satisfy exercise count.",
-            "For chest/triceps/front_delt sessions, never add biceps, rear_delt, side_delt, lats, upper_back, mid_back, or lower_back slots.",
-            "For back/lats/rear_delt/biceps sessions, never add chest, triceps, or front_delt slots.",
-            "If availableTimeMinutes is tight, reduce slot count instead of adding unrelated muscles.",
-            "Respect equipmentMode, availableTimeMinutes, recoveryScore, weekly volume deficits, bodyGoalProfile, nutritionStatus, and inBodyTrend.",
-            "Do not overreact to a single InBody record; if confidence is low, say insufficient_data.",
-            "Do not force priority muscles when recovery is poor, soreness is high, or pain is present.",
-            "Do not name the result Push Day, Pull Day, Legs, Upper, Lower, or Full Body.",
-            "Use body-part titles such as 광배·등 상부·측면어깨 집중.",
-            "If constraints leave no safe session, choose rest_recommended.",
-            "Set fallbackUsed to false."
-          ].join("\n"),
-          input: JSON.stringify(context),
-          text: {
-            format: {
-              type: "json_schema",
-              name: "daily_training_decision",
-              schema: dailyTrainingDecisionJsonSchema,
-              strict: true
-            }
+    const response = await withTimeout(
+      client.responses.create({
+        model,
+        instructions: [
+          "You are the AI Training Focus Planner for a Korean Adaptive Daily Fitness Coach.",
+          "Use only the provided JSON. Do not infer unavailable facts or invent records.",
+          "Return Korean reasoning and JSON only through the provided schema.",
+          "Choose session mode, body-part focus, selected/excluded muscles, and movement slots only.",
+          "Do not choose concrete exercise names or equipment names. The equipment-aware engine will do that.",
+          "forbiddenMuscles and painMuscles are absolute hard constraints. Never select them or related target regions.",
+          "forbiddenMovementFamilies are absolute hard constraints.",
+          "Never select a movementFamily that is absent from availableMovementCapabilities.",
+          "movementSlots.primaryMuscle and targetRegion must stay inside selectedMuscles or a clearly related accessory range.",
+          "Do not add antagonist or unrelated body parts just to satisfy exercise count.",
+          "For chest/triceps/front_delt sessions, never add biceps, rear_delt, side_delt, lats, upper_back, mid_back, or lower_back slots.",
+          "For back/lats/rear_delt/biceps sessions, never add chest, triceps, or front_delt slots.",
+          "If availableTimeMinutes is tight, reduce slot count instead of adding unrelated muscles.",
+          "Respect equipmentMode, availableTimeMinutes, recoveryScore, weekly volume deficits, bodyGoalProfile, nutritionStatus, and inBodyTrend.",
+          "Do not overreact to a single InBody record; if confidence is low, say insufficient_data.",
+          "Do not force priority muscles when recovery is poor, soreness is high, or pain is present.",
+          "Do not name the result Push Day, Pull Day, Legs, Upper, Lower, or Full Body.",
+          "Use body-part titles such as 광배·등 상부·측면어깨 집중.",
+          "If constraints leave no safe session, choose rest_recommended.",
+          "Set fallbackUsed to false."
+        ].join("\n"),
+        input: JSON.stringify(minimizeTrainingContextForAi(context)),
+        max_output_tokens: 1400,
+        text: {
+          format: {
+            type: "json_schema",
+            name: "daily_training_decision",
+            schema: dailyTrainingDecisionJsonSchema,
+            strict: true
           }
-        })
-      )
+        }
+      })
     );
     const parsed = parseJson<DailyTrainingDecision>(response.output_text);
     const decision = validateDailyTrainingDecision(
@@ -107,20 +96,21 @@ export async function getTrainingFocusDecision(context: DailyTrainingContext) {
     );
 
     return { decision, source: "openai" as const, message: "OpenAI 결정 결과를 적용했습니다." };
-  } catch (error) {
-    const detail =
-      error instanceof Error ? error.message : "알 수 없는 OpenAI 호출 오류";
-    console.warn("[openai] training-focus fallback:", detail);
+  } catch {
+    console.warn("[openai] request failed", {
+      operation: "training-focus",
+      fallback: true
+    });
     return {
       decision: {
         ...fallback,
         warnings: [
           ...fallback.warnings,
-          `OpenAI 호출 실패: ${detail}`
+          "AI 결정을 사용할 수 없어 로컬 fallback 결과를 적용했습니다."
         ]
       },
       source: "fallback" as const,
-      message: `OpenAI 호출 실패로 로컬 fallback 플래너를 사용했습니다. (${detail})`
+      message: "AI 호출을 사용할 수 없어 로컬 fallback 플래너를 사용했습니다."
     };
   }
 }
@@ -143,8 +133,12 @@ export async function getShortCoachJson({
     additionalProperties: false,
     required: ["summary", "actions", "fallbackUsed"],
     properties: {
-      summary: { type: "string" },
-      actions: { type: "array", items: { type: "string" } },
+      summary: { type: "string", minLength: 1, maxLength: 600 },
+      actions: {
+        type: "array",
+        maxItems: 6,
+        items: { type: "string", minLength: 1, maxLength: 300 }
+      },
       fallbackUsed: { type: "boolean" }
     }
   } as const;
@@ -152,11 +146,12 @@ export async function getShortCoachJson({
   if (!client) return fallback;
 
   try {
-    const response = await withSingleRetry(() =>
-      withTimeout(client.responses.create({
+    const response = await withTimeout(
+      client.responses.create({
         model,
         instructions,
         input: JSON.stringify(input),
+        max_output_tokens: 500,
         text: {
           format: {
             type: "json_schema",
@@ -165,15 +160,14 @@ export async function getShortCoachJson({
             strict: true
           }
         }
-      }))
+      })
     );
-    return parseJson<{ summary: string; actions: string[]; fallbackUsed: boolean }>(
-      response.output_text
-    );
-  } catch (error) {
-    const detail =
-      error instanceof Error ? error.message : "알 수 없는 OpenAI 호출 오류";
-    console.warn(`[openai] ${name} fallback:`, detail);
+    return validateCoachResult(parseJson<unknown>(response.output_text));
+  } catch {
+    console.warn("[openai] request failed", {
+      operation: name,
+      fallback: true
+    });
     return fallback;
   }
 }
