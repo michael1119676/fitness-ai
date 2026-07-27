@@ -1,5 +1,7 @@
 # Fitness AI
 
+[![CI](https://github.com/michael1119676/fitness-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/michael1119676/fitness-ai/actions/workflows/ci.yml)
+
 > A constraint-aware daily fitness coach built around structured AI decisions, deterministic recommendation logic, explicit validation, and a local fallback.
 
 [Live demo](https://pitness-ai.vercel.app) · [Repository](https://github.com/michael1119676/fitness-ai) · [Measured evaluation](docs/evaluation-results.md)
@@ -191,4 +193,4 @@ GitHub Actions runs install, lint, typecheck, test, evaluation, and production b
 - Production: [https://pitness-ai.vercel.app](https://pitness-ai.vercel.app)
 - Repository: [https://github.com/michael1119676/fitness-ai](https://github.com/michael1119676/fitness-ai)
 
-The deployed URL returned a rendered Fitness AI app and its GitHub About homepage link matched `https://pitness-ai.vercel.app` when checked on 2026-07-27. The production deployment does not include this branch until the draft PR is merged and Vercel finishes a new deployment.
+The deployed URL returned the rendered Fitness AI app on 2026-07-27. The merged security and evaluation changes are on `main`, the `main` CI run passed, and the GitHub About homepage link matches the production URL.
