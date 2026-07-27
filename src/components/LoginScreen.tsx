@@ -134,7 +134,7 @@ export function LoginScreen() {
               <Dumbbell size={22} aria-hidden />
             </span>
             <p className="mt-5 text-xs font-semibold uppercase tracking-wide text-mint">
-              Pitness AI
+              Fitness AI
             </p>
             <h1 className="mt-2 text-3xl font-semibold md:text-4xl">오늘 운동 시작하기</h1>
             <p className="mt-3 text-sm leading-6 text-slate-300">
